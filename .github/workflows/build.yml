@@ -1,0 +1,72 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  IMAGE_NAME: 1735332/myntra
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarQube Scan
+        uses: sonarsource/sonarqube-scan-action@v4   # older scanner CLI, safer with SonarQube Server 9.9.x
+        with:
+          args: -X   # debug logging to expose the real error; remove once the scan passes
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          SONAR_SCANNER_OPTS: -Xmx2048m   # guards against scanner out-of-memory
+
+      # If you wish to fail your job when the Quality Gate is red, uncomment the
+      # following lines.
+      # - name: SonarQube Quality Gate
+      #   uses: sonarsource/sonarqube-quality-gate-action@master
+      #   timeout-minutes: 5
+      #   env:
+      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+      - name: Docker Login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Docker Scout Filesystem Scan
+        uses: docker/scout-action@v1
+        with:
+          command: quickview,cves
+          path: .
+          only-severities: critical,high
+          exit-code: false   # set to true to fail the build on findings
+
+      - name: Build image
+        run: |
+          docker build \
+            -t ${{ env.IMAGE_NAME }}:latest \
+            -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
+        env:
+          DOCKER_CLI_ACI: 1
+
+      - name: Docker Scout Image Scan
+        uses: docker/scout-action@v1
+        with:
+          command: quickview,cves
+          image: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          only-severities: critical,high
+          exit-code: false   # set to true to block the push on findings
+
+      - name: Push image
+        run: |
+          docker push ${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
